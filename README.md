@@ -101,7 +101,7 @@ The application follows a client-server architecture:
 2. Upload PDF files to your folders
 3. Navigate to the chat interface
 4. Ask questions about your documents
-5. View AI-generated responses with source citations
+
 
 ## License
 
