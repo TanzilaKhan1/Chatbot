@@ -4,7 +4,7 @@ An interactive web application that allows users to upload PDF documents, organi
 
 ## Overview
 
-AI Chat PDF combines a modern Next.js frontend with a FastAPI backend to provide an intuitive interface for document management and AI-assisted information retrieval. The application utilizes OpenAI's language models along with vector search technology to enable natural language conversations with your PDF documents.
+AI Chat PDF combines a modern Next.js frontend with a FastAPI backend to provide an intuitive interface for document management and AI-assisted information retrieval. 
 
 ## Features
 
