@@ -137,8 +137,6 @@ cython_debug/
 *.pickle
 *.h5
 *.hdf5
-model/
-models/
 checkpoints/
 logs/
 
