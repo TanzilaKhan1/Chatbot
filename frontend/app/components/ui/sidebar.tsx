@@ -91,7 +91,7 @@ const SidebarProvider = React.forwardRef<
     return (
       <SidebarContext.Provider value={contextValue}>
         <div
-          className={cn('flex min-h-screen w-full', className)}
+          className={cn('flex h-screen w-full', className)}
           ref={ref}
           {...props}
         >
@@ -159,7 +159,7 @@ const SidebarInset = React.forwardRef<
     <main
       ref={ref}
       className={cn(
-        'relative flex min-h-screen flex-1 flex-col bg-background transition-all duration-200 ease-in-out', 
+        'relative flex h-screen flex-1 flex-col bg-background transition-all duration-200 ease-in-out', 
         state === 'collapsed' && 'w-full',
         className
       )}

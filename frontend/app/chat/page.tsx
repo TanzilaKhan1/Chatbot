@@ -1,8 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
+import { 
+  chatWithSession, 
+  getFolderSessions, 
+  getSession, 
+  deleteSession,
+  updateSessionTitle 
+} from '../services/api';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
@@ -23,7 +30,8 @@ import {
   ChevronDownIcon, 
   GlobeIcon, 
   LockIcon,
-  UserIcon 
+  UserIcon,
+  TrashIcon 
 } from '../components/icons';
 import { nanoid } from 'nanoid';
 import { cn } from '../lib/utils';
@@ -36,33 +44,6 @@ interface Message {
   content: string;
   timestamp: Date;
 }
-
-// Interface for stored chats
-interface StoredChat {
-  id: string;
-  title: string;
-  messages: StoredMessage[];
-  model: string;
-}
-
-interface StoredMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string; // Stored as string in ISO format
-}
-
-// Convert Message to StoredMessage for saving to localStorage
-const messageToStoredMessage = (message: Message): StoredMessage => ({
-  ...message,
-  timestamp: message.timestamp.toISOString()
-});
-
-// Convert StoredMessage to Message when reading from localStorage
-const storedMessageToMessage = (storedMessage: StoredMessage): Message => ({
-  ...storedMessage,
-  timestamp: new Date(storedMessage.timestamp)
-});
 
 const Greeting = () => {
   return (
@@ -144,24 +125,22 @@ const AppSidebar = ({
   chatHistory, 
   onNewChat, 
   activeChatId,
-  onSelectChat 
+  onSelectChat,
+  onDeleteChat,
+  isLoadingHistory
 }: { 
   chatHistory: Array<{ id: string, title: string }>, 
   onNewChat: () => void,
   activeChatId: string | null,
-  onSelectChat: (chatId: string) => void
+  onSelectChat: (chatId: string) => void,
+  onDeleteChat: (chatId: string) => void,
+  isLoadingHistory: boolean
 }) => {
   const router = useRouter();
   const { setOpenMobile } = useSidebar();
 
   const handleChatClick = (chatId: string) => {
-    // Call the direct handler to load the chat
     onSelectChat(chatId);
-    
-    // Update URL without relying on it for state
-    const newUrl = `/chat?id=${chatId}`;
-    window.history.pushState({}, '', newUrl);
-    
     setOpenMobile(false);
   };
 
@@ -204,22 +183,39 @@ const AppSidebar = ({
       </SidebarHeader>
       <SidebarContent>
         <div className="flex flex-col gap-2 p-2">
-          {chatHistory.length > 0 && <div className="text-xs text-zinc-500 px-2 py-1">Today</div>}
-          {chatHistory.map((item) => (
-            <div
-              key={item.id}
-              className={`flex items-center gap-2 px-2 py-2 text-sm hover:bg-accent rounded-md cursor-pointer ${
-                activeChatId === item.id ? 'bg-accent' : ''
-              }`}
-              onClick={() => handleChatClick(item.id)}
-            >
-              <span className="truncate">{item.title}</span>
-            </div>
-          ))}
-          {chatHistory.length > 0 && (
-            <div className="text-xs text-zinc-500 px-2 py-1 mt-4">
-              You have reached the end of your chat history.
-            </div>
+          {isLoadingHistory ? (
+            <div className="text-xs text-zinc-500 px-2 py-1">Loading chat history...</div>
+          ) : (
+            <>
+              {chatHistory.length > 0 && <div className="text-xs text-zinc-500 px-2 py-1">Recent Chats</div>}
+              {chatHistory.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-center gap-2 px-2 py-2 text-sm hover:bg-accent rounded-md cursor-pointer group ${
+                    activeChatId === item.id ? 'bg-accent' : ''
+                  }`}
+                  onClick={() => handleChatClick(item.id)}
+                >
+                  <span className="truncate flex-1">{item.title}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="opacity-0 group-hover:opacity-100 p-1 h-fit"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteChat(item.id);
+                    }}
+                  >
+                    <TrashIcon size={14} />
+                  </Button>
+                </div>
+              ))}
+              {chatHistory.length > 0 && (
+                <div className="text-xs text-zinc-500 px-2 py-1 mt-4">
+                  You have reached the end of your chat history.
+                </div>
+              )}
+            </>
           )}
         </div>
       </SidebarContent>
@@ -325,7 +321,6 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
-  // Close dropdown when clicking outside
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -340,7 +335,7 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
   }, []);
 
   const handleBackClick = () => {
-    router.push('/'); // Navigate to the file list page
+    router.push('/');
   };
 
   return (
@@ -372,10 +367,20 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
           <Button 
             variant="ghost" 
             size="sm" 
-            className="gap-2"
+            className={`gap-2 ${selectedModel === 'Simple' ? 'text-amber-600' : ''}`}
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
           >
-            <span className="font-semibold">Chat model: {selectedModel}</span>
+            <span className="font-semibold">
+              {selectedModel === 'OpenAI' && (
+                <>Chat model: OpenAI</>
+              )}
+              {selectedModel === 'Simple' && (
+                <>Simple chat mode</>
+              )}
+              {selectedModel !== 'OpenAI' && selectedModel !== 'Simple' && (
+                <>Chat model: {selectedModel}</>
+              )}
+            </span>
             <ChevronDownIcon size={16} />
           </Button>
           {isDropdownOpen && (
@@ -393,16 +398,21 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
                 <button 
                   className="w-full text-left px-4 py-2 hover:bg-accent text-sm"
                   onClick={() => {
-                    setSelectedModel('Gemini');
+                    setSelectedModel('Simple');
                     setIsDropdownOpen(false);
                   }}
                 >
-                  Gemini
+                  Simple Mode
                 </button>
               </div>
             </div>
           )}
         </div>
+        {selectedModel === 'Simple' && (
+          <span className="text-xs text-amber-600 bg-amber-100 px-2 py-1 rounded-md">
+            Using local embeddings (fallback mode)
+          </span>
+        )}
       </div>
       <div className="flex items-center">
         <TooltipProvider>
@@ -427,6 +437,7 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
 
 export default function ChatPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -435,136 +446,127 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState('OpenAI');
   const [isSmallScreen, setIsSmallScreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [folderId, setFolderId] = useState<string | null>(null);
   
-  // Load chat history from localStorage on component mount
-  React.useEffect(() => {
-    const loadChatHistory = () => {
-      try {
-        const storedChats = localStorage.getItem('chatHistory');
-        if (storedChats) {
-          const chats: StoredChat[] = JSON.parse(storedChats);
-          setChatHistory(chats.map(chat => ({ id: chat.id, title: chat.title })));
-          
-          // Check if there's a chat ID in the URL
-          const urlParams = new URLSearchParams(window.location.search);
-          const chatId = urlParams.get('id');
-          if (chatId) {
-            loadChatById(chatId);
-          }
-        }
-      } catch (error) {
-        console.error("Failed to load chat history:", error);
-        setError("Failed to load chat history. Please refresh or try again later.");
-      }
-    };
+  // Get folder ID from URL params
+  useEffect(() => {
+    const folderIdParam = searchParams.get('folder_id');
+    console.log('Folder ID from URL:', folderIdParam); // Debug log
     
-    loadChatHistory();
-  }, []);
+    if (folderIdParam && folderIdParam !== 'null' && folderIdParam.trim() !== '') {
+      setFolderId(folderIdParam);
+      loadFolderSessions(folderIdParam);
+    } else {
+      // If no valid folder_id, redirect to home page
+      console.log('Invalid or missing folder_id, redirecting to home');
+      router.push('/');
+    }
+  }, [searchParams, router]);
 
-  // Function to load chat by its ID - extracted for reuse
-  const loadChatById = (chatId: string) => {
-    setError(null);
-    setActiveChatId(chatId);
+  // Load folder sessions
+  const loadFolderSessions = async (folderId: string) => {
+    // Validate folder ID before making API call
+    if (!folderId || folderId === 'null' || folderId.trim() === '') {
+      console.error('Invalid folder ID provided to loadFolderSessions:', folderId);
+      setError('Invalid folder ID');
+      return;
+    }
     
     try {
-      const storedChats = localStorage.getItem('chatHistory');
-      if (storedChats) {
-        const chats: StoredChat[] = JSON.parse(storedChats);
-        const chat = chats.find(c => c.id === chatId);
-        
-        if (chat) {
-          // Convert stored messages to Message objects with proper Date objects
-          setMessages(chat.messages.map(storedMessageToMessage));
-          setSelectedModel(chat.model || 'OpenAI');
-        } else {
-          // Chat not found, reset to empty state
-          setMessages([]);
-          console.warn(`Chat with ID ${chatId} not found in localStorage`);
-        }
+      setIsLoadingHistory(true);
+      const sessions = await getFolderSessions(folderId);
+      setChatHistory(sessions.map(s => ({ id: s.id, title: s.title })));
+      
+      // Check if there's a session ID in the URL
+      const sessionId = searchParams.get('id');
+      if (sessionId) {
+        await loadChatById(sessionId);
+      }
+    } catch (error) {
+      console.error("Failed to load sessions:", error);
+      setError("Failed to load chat history.");
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Load chat by its ID
+  const loadChatById = async (sessionId: string) => {
+    try {
+      setError(null);
+      setActiveChatId(sessionId);
+      
+      const session = await getSession(sessionId);
+      setMessages(session.messages.map(msg => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        timestamp: new Date(msg.created_at)
+      })));
+      setSelectedModel(session.model || 'OpenAI');
+      
+      // Update URL - ensure folderId is valid
+      if (folderId && folderId !== 'null') {
+        const newUrl = `/chat?folder_id=${folderId}&id=${sessionId}`;
+        window.history.pushState({}, '', newUrl);
       }
     } catch (error) {
       console.error("Failed to load chat messages:", error);
-      setError("Failed to load this chat. Please try another chat or start a new one.");
+      setError("Failed to load this chat.");
+      setMessages([]);
     }
   };
   
-  // Check if screen is small on component mount
-  React.useEffect(() => {
+  // Check if screen is small
+  useEffect(() => {
     const checkScreenSize = () => {
       setIsSmallScreen(window.innerWidth < 768);
     };
     
-    // Initial check
     checkScreenSize();
-    
-    // Add event listener
     window.addEventListener('resize', checkScreenSize);
-    
-    // Cleanup
     return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
-  // Save chat to localStorage
-  const saveChat = (chatId: string, chatMessages: Message[], chatTitle: string) => {
-    try {
-      const storedChats = localStorage.getItem('chatHistory') || '[]';
-      const chats: StoredChat[] = JSON.parse(storedChats);
-      
-      // Convert Message objects to StoredMessage objects for localStorage
-      const storedMessages = chatMessages.map(messageToStoredMessage);
-      
-      // Find and update existing chat or add new one
-      const existingChatIndex = chats.findIndex(c => c.id === chatId);
-      
-      if (existingChatIndex !== -1) {
-        // Update existing chat
-        chats[existingChatIndex] = {
-          ...chats[existingChatIndex],
-          title: chatTitle,
-          messages: storedMessages,
-          model: selectedModel
-        };
-      } else {
-        // Add new chat
-        chats.unshift({
-          id: chatId,
-          title: chatTitle,
-          messages: storedMessages,
-          model: selectedModel
-        });
-      }
-      
-      // Save updated chats
-      localStorage.setItem('chatHistory', JSON.stringify(chats));
-      
-      // Update chat history state
-      setChatHistory(chats.map(chat => ({ id: chat.id, title: chat.title })));
-    } catch (error) {
-      console.error("Failed to save chat:", error);
+  const createNewChat = () => {
+    setMessages([]);
+    setActiveChatId(null);
+    
+    // Update URL without session ID - ensure folderId is valid
+    if (folderId && folderId !== 'null') {
+      const newUrl = `/chat?folder_id=${folderId}`;
+      window.history.pushState({}, '', newUrl);
     }
   };
 
-  // Update createNewChat to use the loadChatById function
-  const createNewChat = () => {
-    const newChatId = nanoid();
-    
-    // Reset messages directly
-    setMessages([]);
-    setActiveChatId(newChatId);
-    
-    // Update the URL without causing a full reload
-    const newUrl = `/chat?id=${newChatId}`;
-    window.history.pushState({}, '', newUrl);
-    
-    return newChatId;
+  const handleDeleteChat = async (sessionId: string) => {
+    try {
+      await deleteSession(sessionId);
+      
+      // Remove from chat history
+      setChatHistory(prev => prev.filter(chat => chat.id !== sessionId));
+      
+      // If this was the active chat, clear it
+      if (activeChatId === sessionId) {
+        createNewChat();
+      }
+    } catch (error) {
+      console.error("Failed to delete chat:", error);
+      setError("Failed to delete chat.");
+    }
   };
 
   const handleSubmit = async (content: string) => {
+    // Validate inputs before proceeding
     if (!content.trim() || isLoading) return;
-
-    // If no active chat, create a new one
-    const chatId = activeChatId || createNewChat();
     
+    if (!folderId || folderId === 'null' || folderId.trim() === '') {
+      console.error('Cannot submit chat without valid folder ID:', folderId);
+      setError('Invalid folder selected. Please go back and select a valid folder.');
+      return;
+    }
+
     const userMessage: Message = {
       id: nanoid(),
       role: 'user',
@@ -577,50 +579,95 @@ export default function ChatPage() {
     setInput('');
     setIsLoading(true);
 
-    // Create chat title from first message if this is the first message
-    let chatTitle = content.trim().slice(0, 30);
-    if (updatedMessages.length > 1) {
-      // If not the first message, try to find existing title in localStorage
-      try {
-        const storedChats = localStorage.getItem('chatHistory');
-        if (storedChats) {
-          const chats: StoredChat[] = JSON.parse(storedChats);
-          const existingChat = chats.find(c => c.id === chatId);
-          if (existingChat) {
-            chatTitle = existingChat.title;
-          }
-        }
-      } catch (error) {
-        console.error("Error finding existing chat title:", error);
-      }
-    }
-    
-    // Save to localStorage
-    saveChat(chatId, updatedMessages, chatTitle);
+    try {
+      const response = await chatWithSession(
+        content.trim(),
+        folderId,
+        activeChatId || undefined,
+        selectedModel
+      );
 
-    // Simulate AI response based on selected model
-    setTimeout(() => {
-      const responseText = selectedModel === 'OpenAI' 
-        ? `OpenAI response: I'll help you with "${content.trim()}". How can I assist you further?`
-        : `Gemini response: I'm analyzing "${content.trim()}". What else would you like to know?`;
-        
+      // If we got a response but the model is different, it means we fell back to simple mode
+      const usedFallback = selectedModel === 'OpenAI' && response.model === 'Simple';
+      if (usedFallback) {
+        // Add a system notification about fallback
+        const fallbackNotice: Message = {
+          id: nanoid(),
+          role: 'assistant',
+          content: 'OpenAI API quota exceeded. Automatically switched to simple chat mode for this response.',
+          timestamp: new Date(),
+        };
+        updatedMessages.push(fallbackNotice);
+      }
+
       const aiMessage: Message = {
         id: nanoid(),
         role: 'assistant',
-        content: responseText,
+        content: response.response,
         timestamp: new Date(),
       };
       
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
-      setIsLoading(false);
       
-      // Save the conversation with AI response
-      saveChat(chatId, finalMessages, chatTitle);
-    }, 1000);
+      // If fallback occurred, update the selected model in the UI
+      if (usedFallback) {
+        setSelectedModel('Simple');
+      }
+      
+      // Update active chat ID if this created a new session
+      if (!activeChatId && response.session_id) {
+        setActiveChatId(response.session_id);
+        // Reload sessions to show the new one
+        await loadFolderSessions(folderId);
+      }
+      
+    } catch (error) {
+      console.error('Chat API error:', error);
+      
+      const errorMessage: Message = {
+        id: nanoid(),
+        role: 'assistant',
+        content: 'I encountered an error processing your request. Please try again.',
+        timestamp: new Date(),
+      };
+      
+      setMessages([...updatedMessages, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const showSuggestions = messages.length === 0;
+
+  // Show loading state while checking for folder ID
+  if (folderId === null) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // This should not be reached anymore since we redirect in useEffect
+  if (!folderId || folderId === 'null') {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <h2 className="text-2xl font-semibold mb-4">No folder selected</h2>
+          <p className="text-muted-foreground mb-4">
+            Please select a folder from the main page to start chatting with your documents.
+          </p>
+          <Button onClick={() => router.push('/')}>
+            Go to Folders
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <TooltipProvider>
@@ -630,16 +677,18 @@ export default function ChatPage() {
           onNewChat={createNewChat}
           activeChatId={activeChatId}
           onSelectChat={loadChatById}
+          onDeleteChat={handleDeleteChat}
+          isLoadingHistory={isLoadingHistory}
         />
-        <SidebarInset>
+        <SidebarInset className="flex flex-col h-screen">
           <ChatHeader 
             selectedModel={selectedModel}
             setSelectedModel={setSelectedModel}
           />
           
-          <div className="flex-1 flex flex-col">
+          <div className="flex-1 flex flex-col min-h-0">
             {/* Messages area */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden">
               {error ? (
                 <div className="max-w-3xl mx-auto mt-8 p-4 bg-red-50 text-red-800 rounded-md">
                   <p className="font-medium">Error</p>
@@ -664,13 +713,13 @@ export default function ChatPage() {
                       className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
                       <div
-                        className={`max-w-xs sm:max-w-md lg:max-w-lg xl:max-w-xl px-4 py-2 rounded-lg ${
+                        className={`w-full max-w-xs sm:max-w-md lg:max-w-lg xl:max-w-xl px-4 py-2 rounded-lg overflow-x-hidden ${
                           message.role === 'user'
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-muted-foreground'
                         }`}
                       >
-                        <p className="text-sm">{message.content}</p>
+                        <p className="text-sm message-content">{message.content}</p>
                         <p className="text-xs opacity-70 mt-1">
                           {message.timestamp.toLocaleTimeString()}
                         </p>
@@ -695,8 +744,8 @@ export default function ChatPage() {
               )}
             </div>
 
-            {/* Input area */}
-            <div className="border-t bg-background p-4">
+            {/* Input area - Fixed at bottom */}
+            <div className="flex-shrink-0 border-t bg-background p-4">
               <div className="max-w-3xl mx-auto">
                 <MultimodalInput
                   input={input}
@@ -712,4 +761,4 @@ export default function ChatPage() {
       </SidebarProvider>
     </TooltipProvider>
   );
-} 
+}

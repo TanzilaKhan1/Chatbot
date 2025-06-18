@@ -5,19 +5,22 @@ import { useRouter } from 'next/navigation';
 
 interface FolderHeaderProps {
   folderName: string;
+  folderId: string;
   onBack: () => void;
   onUploadClick: () => void;
 }
 
 export default function FolderHeader({
   folderName,
+  folderId,
   onBack,
   onUploadClick
 }: FolderHeaderProps) {
   const router = useRouter();
 
   const handleChatClick = () => {
-    router.push('/chat');
+    // Navigate to chat page with folder_id parameter
+    router.push(`/chat?folder_id=${folderId}`);
   };
 
   return (

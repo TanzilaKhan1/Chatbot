@@ -70,6 +70,7 @@ export default function FolderDetail() {
     <div className="min-h-screen bg-gray-50">
       <FolderHeader 
         folderName={folderName}
+        folderId={folderId}
         onBack={() => router.push('/')}
         onUploadClick={() => setShowUploadModal(true)}
       />
