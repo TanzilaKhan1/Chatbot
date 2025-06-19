@@ -13,6 +13,8 @@ AI Chat PDF combines a modern Next.js frontend with a FastAPI backend to provide
 - **RAG-based Responses**: Get accurate answers with relevant sources from your documents
 - **Session Management**: Save and continue conversations across multiple sessions
 - **Responsive UI**: Modern, responsive interface built with Next.js and TailwindCSS
+- **Multiple AI Models**: Support for various AI models including OpenAI, Google Gemini, Ollama, and Simple Matcher
+- **Automatic Fallback**: System automatically switches between models if one fails
 
 ## Tech Stack
 
