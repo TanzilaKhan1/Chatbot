@@ -8,7 +8,8 @@ import {
   getFolderSessions, 
   getSession, 
   deleteSession,
-  updateSessionTitle 
+  updateSessionTitle,
+  checkFolderFilesIndexed
 } from '../services/api';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
@@ -319,7 +320,22 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
   const { toggleSidebar } = useSidebar();
   const router = useRouter();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [modelStatus, setModelStatus] = useState<any>(null);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Fetch model status on component mount
+  React.useEffect(() => {
+    const fetchModelStatus = async () => {
+      try {
+        const { getModelsStatus } = await import('../services/chatApi');
+        const status = await getModelsStatus();
+        setModelStatus(status);
+      } catch (error) {
+        console.error('Failed to fetch model status:', error);
+      }
+    };
+    fetchModelStatus();
+  }, []);
 
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -367,50 +383,137 @@ const ChatHeader = ({ selectedModel, setSelectedModel }: {
           <Button 
             variant="ghost" 
             size="sm" 
-            className={`gap-2 ${selectedModel === 'Simple' ? 'text-amber-600' : ''}`}
+            className="gap-2"
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
           >
             <span className="font-semibold">
+              {selectedModel === 'Smart' && (
+                <>Smart mode (auto-select)</>
+              )}
               {selectedModel === 'OpenAI' && (
-                <>Chat model: OpenAI</>
+                <>OpenAI GPT</>
               )}
-              {selectedModel === 'Simple' && (
-                <>Simple chat mode</>
+              {selectedModel === 'Gemini' && (
+                <>Google Gemini</>
               )}
-              {selectedModel !== 'OpenAI' && selectedModel !== 'Simple' && (
+              {selectedModel === 'Ollama' && (
+                <>Ollama Local LLM</>
+              )}
+              {!['Smart', 'OpenAI', 'Gemini', 'Ollama'].includes(selectedModel) && (
                 <>Chat model: {selectedModel}</>
               )}
             </span>
             <ChevronDownIcon size={16} />
           </Button>
           {isDropdownOpen && (
-            <div className="absolute top-full left-0 mt-1 bg-popover shadow-md rounded-md border border-border z-10">
+            <div className="absolute top-full left-0 mt-1 bg-popover shadow-md rounded-md border border-border z-10 min-w-[250px]">
               <div className="py-1">
                 <button 
-                  className="w-full text-left px-4 py-2 hover:bg-accent text-sm"
+                  className="w-full text-left px-4 py-2 hover:bg-accent text-sm flex items-center justify-between"
+                  onClick={() => {
+                    setSelectedModel('Smart');
+                    setIsDropdownOpen(false);
+                  }}
+                >
+                  <div>
+                    <div className="font-medium">Smart Mode</div>
+                    <div className="text-xs text-muted-foreground">Auto-selects best available</div>
+                  </div>
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Recommended</span>
+                </button>
+                <button 
+                  className={`w-full text-left px-4 py-2 hover:bg-accent text-sm flex items-center justify-between ${
+                    modelStatus?.models?.openai?.available ? '' : 'opacity-50'
+                  }`}
                   onClick={() => {
                     setSelectedModel('OpenAI');
                     setIsDropdownOpen(false);
                   }}
+                  disabled={!modelStatus?.models?.openai?.available}
                 >
-                  OpenAI
+                  <div>
+                    <div className="font-medium">OpenAI GPT</div>
+                    <div className="text-xs text-muted-foreground">Advanced AI model</div>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    modelStatus?.models?.openai?.available 
+                      ? 'bg-green-100 text-green-800' 
+                      : 'bg-red-100 text-red-800'
+                  }`}>
+                    {modelStatus?.models?.openai?.available ? 'Available' : 'Unavailable'}
+                  </span>
                 </button>
                 <button 
-                  className="w-full text-left px-4 py-2 hover:bg-accent text-sm"
+                  className={`w-full text-left px-4 py-2 hover:bg-accent text-sm flex items-center justify-between ${
+                    modelStatus?.models?.gemini?.available ? '' : 'opacity-50'
+                  }`}
                   onClick={() => {
-                    setSelectedModel('Simple');
+                    setSelectedModel('Gemini');
                     setIsDropdownOpen(false);
                   }}
+                  disabled={!modelStatus?.models?.gemini?.available}
                 >
-                  Simple Mode
+                  <div>
+                    <div className="font-medium">Google Gemini</div>
+                    <div className="text-xs text-muted-foreground">Google's AI model</div>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    modelStatus?.models?.gemini?.available 
+                      ? 'bg-green-100 text-green-800' 
+                      : 'bg-red-100 text-red-800'
+                  }`}>
+                    {modelStatus?.models?.gemini?.available ? 'Available' : 'Unavailable'}
+                  </span>
+                </button>
+                <button 
+                  className={`w-full text-left px-4 py-2 hover:bg-accent text-sm flex items-center justify-between ${
+                    modelStatus?.models?.ollama?.available ? '' : 'opacity-50'
+                  }`}
+                  onClick={() => {
+                    setSelectedModel('Ollama');
+                    setIsDropdownOpen(false);
+                  }}
+                  disabled={!modelStatus?.models?.ollama?.available}
+                >
+                  <div>
+                    <div className="font-medium">Ollama Local LLM</div>
+                    <div className="text-xs text-muted-foreground">Local LLM via Ollama</div>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    modelStatus?.models?.ollama?.available 
+                      ? 'bg-green-100 text-green-800' 
+                      : 'bg-red-100 text-red-800'
+                  }`}>
+                    {modelStatus?.models?.ollama?.available ? 'Available' : 'Unavailable'}
+                  </span>
                 </button>
               </div>
             </div>
           )}
         </div>
-        {selectedModel === 'Simple' && (
-          <span className="text-xs text-amber-600 bg-amber-100 px-2 py-1 rounded-md">
-            Using local embeddings (fallback mode)
+        {selectedModel === 'Smart' && (
+          <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-md">
+            {modelStatus?.recommended ? `Auto-selecting: ${modelStatus.recommended}` : 'Smart mode active'}
+          </span>
+        )}
+        {selectedModel === 'Ollama' && modelStatus?.models?.ollama?.available && (
+          <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded-md">
+            Local LLM active (Ollama)
+          </span>
+        )}
+        {selectedModel === 'Gemini' && !modelStatus?.models?.gemini?.available && (
+          <span className="text-xs text-red-600 bg-red-100 px-2 py-1 rounded-md">
+            Gemini unavailable - will fallback
+          </span>
+        )}
+        {selectedModel === 'OpenAI' && !modelStatus?.models?.openai?.available && (
+          <span className="text-xs text-red-600 bg-red-100 px-2 py-1 rounded-md">
+            OpenAI unavailable - will fallback
+          </span>
+        )}
+        {selectedModel === 'Ollama' && !modelStatus?.models?.ollama?.available && (
+          <span className="text-xs text-red-600 bg-red-100 px-2 py-1 rounded-md">
+            Ollama unavailable - will fallback
           </span>
         )}
       </div>
@@ -443,7 +546,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<Array<{ id: string, title: string }>>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState('OpenAI');
+  const [selectedModel, setSelectedModel] = useState('Smart');
   const [isSmallScreen, setIsSmallScreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -580,6 +683,32 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
+      // Check if files are indexed before sending the message
+      const indexingResult = await checkFolderFilesIndexed(folderId);
+      if (!indexingResult.indexed) {
+        const indexingMessage: Message = {
+          id: nanoid(),
+          role: 'assistant',
+          content: 'Your files are still being processed for AI search capabilities. Please wait a moment before asking questions about them.',
+          timestamp: new Date(),
+        };
+        setMessages([...updatedMessages, indexingMessage]);
+        setIsLoading(false);
+        return;
+      }
+      
+      // If files are using Qdrant as fallback, inform the user
+      if (indexingResult.storage === 'qdrant') {
+        const storageNotice: Message = {
+          id: nanoid(),
+          role: 'assistant',
+          content: 'Note: Using Qdrant for vector storage as Supabase is not available.',
+          timestamp: new Date(),
+        };
+        updatedMessages.push(storageNotice);
+        setMessages(updatedMessages);
+      }
+
       const response = await chatWithSession(
         content.trim(),
         folderId,
@@ -587,14 +716,18 @@ export default function ChatPage() {
         selectedModel
       );
 
-      // If we got a response but the model is different, it means we fell back to simple mode
-      const usedFallback = selectedModel === 'OpenAI' && response.model === 'Simple';
+      // Check if we're using a fallback model
+      const usedFallback = response.model === 'Unavailable' || 
+                          (selectedModel === 'OpenAI' && response.model !== 'OpenAI') ||
+                          (selectedModel === 'Gemini' && response.model !== 'Gemini') ||
+                          (selectedModel === 'Ollama' && response.model !== 'Ollama');
+      
       if (usedFallback) {
         // Add a system notification about fallback
         const fallbackNotice: Message = {
           id: nanoid(),
           role: 'assistant',
-          content: 'OpenAI API quota exceeded. Automatically switched to simple chat mode for this response.',
+          content: 'Note: No AI models are currently available. Using fallback mode to provide document excerpts.',
           timestamp: new Date(),
         };
         updatedMessages.push(fallbackNotice);
@@ -612,7 +745,7 @@ export default function ChatPage() {
       
       // If fallback occurred, update the selected model in the UI
       if (usedFallback) {
-        setSelectedModel('Simple');
+        setSelectedModel('Smart');
       }
       
       // Update active chat ID if this created a new session

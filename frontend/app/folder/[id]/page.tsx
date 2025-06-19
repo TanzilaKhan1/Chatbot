@@ -19,6 +19,7 @@ export default function FolderDetail() {
   
   const [files, setFiles] = useState<FileItem[]>([])
   const [isUploading, setIsUploading] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showUploadModal, setShowUploadModal] = useState(false)
 
@@ -40,13 +41,24 @@ export default function FolderDetail() {
     setIsUploading(true)
     
     try {
-      await api.uploadFile(file, folderId)
-      await fetchFiles()
+      // Upload file to Supabase
+      const uploadResponse = await api.uploadFile(file, folderId)
+      
+      // Set processing state to true while vectors are being generated
+      setIsProcessing(true)
+      setIsUploading(false)
+      
+      // Wait a bit to allow vector processing to start on the backend
+      setTimeout(async () => {
+        // Fetch updated files list
+        await fetchFiles()
+        setIsProcessing(false)
+      }, 2000) // Give backend time to start processing
     } catch (error) {
       console.error('Error uploading file:', error)
-      throw error; // Re-throw to let the modal handle the error
-    } finally {
       setIsUploading(false)
+      setIsProcessing(false)
+      throw error; // Re-throw to let the modal handle the error
     }
   }
 
@@ -78,6 +90,13 @@ export default function FolderDetail() {
       {/* Files List */}
       <div className="container mx-auto px-6 py-8">
         <h2 className="text-xl font-semibold text-gray-700 mb-6">Files</h2>
+        
+        {isProcessing && (
+          <div className="mb-4 bg-blue-50 p-4 rounded-md flex items-center text-blue-700">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-700 mr-2"></div>
+            <span>Processing document for AI search capabilities...</span>
+          </div>
+        )}
         
         {loading ? (
           <LoadingSpinner />

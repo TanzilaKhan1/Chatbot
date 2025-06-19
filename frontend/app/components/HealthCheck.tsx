@@ -1,16 +1,20 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { healthCheck, checkConfig, checkSimpleChatHealth } from '../services/api';
+import { healthCheck, checkConfig } from '../services/api';
 
 interface HealthStatus {
   backend: 'loading' | 'healthy' | 'unhealthy';
   config: 'loading' | 'healthy' | 'unhealthy';
-  chat: 'loading' | 'healthy' | 'unhealthy';
   details: {
     backend?: any;
     config?: any;
-    chat?: any;
+  };
+  vectorStorage?: {
+    primary: 'supabase' | 'qdrant' | 'unknown';
+    supabase_available: boolean;
+    qdrant_available: boolean;
+    using_supabase_vectors: boolean;
   };
 }
 
@@ -23,7 +27,6 @@ export default function HealthCheck() {
   const [health, setHealth] = useState<HealthStatus>({
     backend: 'loading',
     config: 'loading',
-    chat: 'loading',
     details: {}
   });
   const [isVisible, setIsVisible] = useState(false);
@@ -33,7 +36,6 @@ export default function HealthCheck() {
       ...prev,
       backend: 'loading',
       config: 'loading',
-      chat: 'loading'
     }));
 
     // Check backend health
@@ -42,7 +44,8 @@ export default function HealthCheck() {
       setHealth(prev => ({
         ...prev,
         backend: backendHealth.status === 'healthy' ? 'healthy' : 'unhealthy',
-        details: { ...prev.details, backend: backendHealth }
+        details: { ...prev.details, backend: backendHealth },
+        vectorStorage: backendHealth.vector_storage
       }));
     } catch (error) {
       setHealth(prev => ({
@@ -65,22 +68,6 @@ export default function HealthCheck() {
         ...prev,
         config: 'unhealthy',
         details: { ...prev.details, config: { error: 'Config check failed' } }
-      }));
-    }
-
-    // Check chat health
-    try {
-      const chatHealth = await checkSimpleChatHealth() as HealthResponse;
-      setHealth(prev => ({
-        ...prev,
-        chat: chatHealth.status === 'healthy' ? 'healthy' : 'unhealthy',
-        details: { ...prev.details, chat: chatHealth }
-      }));
-    } catch (error) {
-      setHealth(prev => ({
-        ...prev,
-        chat: 'unhealthy',
-        details: { ...prev.details, chat: { error: 'Chat service unavailable' } }
       }));
     }
   };
@@ -148,12 +135,29 @@ export default function HealthCheck() {
           </span>
         </div>
         
-        <div className="flex justify-between items-center">
-          <span>Chat Service:</span>
-          <span className={`flex items-center gap-1 ${getStatusColor(health.chat)}`}>
-            {getStatusIcon(health.chat)} {health.chat}
-          </span>
-        </div>
+        {health.vectorStorage && (
+          <div className="mt-2 pt-2 border-t border-gray-200">
+            <div className="font-semibold mb-1">Vector Storage</div>
+            <div className="flex justify-between items-center text-xs">
+              <span>Primary Storage:</span>
+              <span className={`${health.vectorStorage.primary === 'supabase' ? 'text-green-600' : 'text-yellow-600'}`}>
+                {health.vectorStorage.primary.toUpperCase()}
+              </span>
+            </div>
+            <div className="flex justify-between items-center text-xs">
+              <span>Supabase:</span>
+              <span className={health.vectorStorage.supabase_available ? 'text-green-600' : 'text-red-600'}>
+                {health.vectorStorage.supabase_available ? 'Available' : 'Unavailable'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center text-xs">
+              <span>Qdrant:</span>
+              <span className={health.vectorStorage.qdrant_available ? 'text-green-600' : 'text-red-600'}>
+                {health.vectorStorage.qdrant_available ? 'Available' : 'Unavailable'}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
       
       <div className="mt-3 pt-3 border-t">
@@ -165,7 +169,7 @@ export default function HealthCheck() {
         </button>
       </div>
       
-      {(health.backend === 'unhealthy' || health.config === 'unhealthy' || health.chat === 'unhealthy') && (
+      {(health.backend === 'unhealthy' || health.config === 'unhealthy') && (
         <div className="mt-2 p-2 bg-red-50 text-red-800 rounded text-xs">
           Some services are not working properly. Check the backend configuration.
         </div>

@@ -1,21 +1,32 @@
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_qdrant import Qdrant
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from services.document_service import DocumentService
 from models.schemas import ChatRequest, ChatResponse
-
+from openai import OpenAI
+import google.generativeai as genai
+import requests
+import json
+from rag import RAGChat
+from config import config
+from dependencies import check_openai_api_key, check_gemini_api_key, check_ollama_availability
+from vector_store import VectorStore
+import asyncio
 
 class ChatService:
     """Service for chat operations with documents"""
     
-    def __init__(self, supabase, embeddings, llm, qdrant_client, sentence_model):
+    def __init__(self, supabase, embeddings, llm, qdrant_client, gemini_model=None):
         self.supabase = supabase
         self.embeddings = embeddings
         self.llm = llm
         self.qdrant_client = qdrant_client
-        self.sentence_model = sentence_model
+        self.gemini_model = gemini_model
         self.document_service = DocumentService()
+        
+        # Initialize vector store (can be configured to use Supabase or Qdrant)
+        self.vector_store = VectorStore(supabase_client=supabase)
     
     def get_folder_files(self, folder_id: str) -> List[dict]:
         """Get all files in a folder"""
@@ -27,6 +38,36 @@ class ChatService:
             raise Exception("No files found in this folder")
         
         return [item["files"] for item in files_response.data if item["files"]]
+    
+    async def ensure_files_are_indexed(self, folder_id: str, files: List[dict]):
+        """Ensure all files in folder are properly indexed in vector store"""
+        for file_info in files:
+            file_id = file_info['id']
+            
+            # Check if file is already indexed
+            test_results = await self.vector_store.similarity_search(
+                "test query",
+                k=1,
+                filter_dict={"file_id": file_id}
+            )
+            
+            if not test_results:
+                print(f"File {file_info['original_filename']} not found in vector store. Processing...")
+                
+                # Process and index the file
+                from document_processor import DocumentProcessor
+                processor = DocumentProcessor(self.supabase)
+                
+                chunks = await processor.process_pdf(
+                    file_info['storage_path'],
+                    file_id,
+                    folder_id,
+                    file_info['original_filename']
+                )
+                
+                if chunks:
+                    await self.vector_store.add_documents(chunks, file_id)
+                    print(f"Indexed {len(chunks)} chunks for {file_info['original_filename']}")
     
     def create_or_get_vector_store(self, folder_id: str, chunks: List[str], chunk_sources: List[str]):
         """Create or get existing vector store for folder"""
@@ -52,51 +93,226 @@ class ChatService:
             embeddings=self.embeddings
         )
     
-    def chat_with_openai(self, request: ChatRequest) -> ChatResponse:
-        """Chat with documents using OpenAI"""
+    def determine_best_model(self) -> str:
+        """
+        Determine the best available model based on API key availability.
+        Priority: OpenAI -> Gemini -> Ollama -> Simple (local)
+        """
+        if check_openai_api_key():
+            return "openai"
+        elif check_gemini_api_key():
+            return "gemini"
+        elif check_ollama_availability():
+            return "ollama"
+        else:
+            return "unavailable"
+    
+    async def search_relevant_content(self, query: str, folder_id: str, k: int = 5) -> Tuple[List[str], List[str], List[str]]:
+        """Search for relevant content using vector store"""
+        # Search using vector store
+        results = await self.vector_store.similarity_search_with_score(
+            query=query,
+            k=k,
+            filter_dict={"folder_id": folder_id}
+        )
+        
+        # Extract content and sources
+        relevant_chunks = []
+        relevant_sources = []
+        all_sources = []
+        
+        for doc, score in results:
+            if score > 0.3:  # Relevance threshold
+                relevant_chunks.append(doc.page_content)
+                source = doc.metadata.get('filename', doc.metadata.get('source', 'Unknown'))
+                relevant_sources.append(source)
+            all_sources.append(doc.metadata.get('filename', doc.metadata.get('source', 'Unknown')))
+        
+        # Remove duplicates while preserving order
+        relevant_sources = list(dict.fromkeys(relevant_sources))
+        all_sources = list(dict.fromkeys(all_sources))
+        
+        return relevant_chunks, relevant_sources, all_sources
+    
+    async def chat_with_gemini(self, request: ChatRequest) -> ChatResponse:
+        """Chat with documents using Google Gemini"""
         try:
-            # Check if OpenAI is available
-            if self.llm is None or self.embeddings is None:
-                print("OpenAI not available, falling back to simple chat")
-                return self.simple_chat(request)
+            if self.gemini_model is None:
+                # Search for relevant content without AI processing
+                files = self.get_folder_files(str(request.folder_id))
+                await self.ensure_files_are_indexed(str(request.folder_id), files)
+                relevant_chunks, relevant_sources, all_sources = await self.search_relevant_content(
+                    request.message, str(request.folder_id)
+                )
+                
+                error_msg = "Google Gemini is not available. Please check your API key configuration."
+                if relevant_chunks:
+                    response_text = f"{error_msg}\n\nHowever, I found these potentially relevant excerpts from your documents:\n\n"
+                    response_text += "\n\n".join(relevant_chunks[:2])  # Show top 2 chunks
+                    return ChatResponse(
+                        response=response_text,
+                        sources=relevant_sources,
+                        model="Unavailable"
+                    )
+                else:
+                    return ChatResponse(
+                        response=f"{error_msg} Additionally, I couldn't find relevant information in the documents for your query.",
+                        sources=all_sources,
+                        model="Unavailable"
+                    )
             
             # Get files from folder
             files = self.get_folder_files(str(request.folder_id))
             
-            # Process files to extract text
-            all_texts, sources = self.document_service.process_files_to_text(files)
+            # Ensure files are indexed
+            await self.ensure_files_are_indexed(str(request.folder_id), files)
             
-            if not all_texts:
-                raise Exception("No readable text found in PDFs")
+            # Search for relevant content
+            relevant_chunks, relevant_sources, all_sources = await self.search_relevant_content(
+                request.message, str(request.folder_id)
+            )
             
-            # Split text into chunks
-            chunks, chunk_sources = self.document_service.split_texts_to_chunks(all_texts, sources)
-            
-            # Create or get vector store
-            vector_store = self.create_or_get_vector_store(str(request.folder_id), chunks, chunk_sources)
-            
-            # Search for relevant chunks
-            relevant_docs = vector_store.similarity_search(request.message, k=3)
+            if not relevant_chunks:
+                return ChatResponse(
+                    response="I couldn't find relevant information in the uploaded documents to answer your question.",
+                    sources=all_sources
+                )
             
             # Build context from relevant documents
-            context = "\n\n".join([doc.page_content for doc in relevant_docs])
-            relevant_sources = list(set([doc.metadata.get("source", "Unknown") for doc in relevant_docs]))
+            context = "\n\n".join(relevant_chunks[:3])  # Use top 3 chunks
             
-            # Generate response
+            # Generate response with Gemini
             prompt = f"""Based on the following context from the uploaded documents, please answer the question.
             
-Context:
-{context}
+            Context:
+            {context}
 
-Question: {request.message}
+            Question: {request.message}
 
-Please provide a helpful and accurate answer based on the context provided. If the answer cannot be found in the context, please say so."""
+            Please provide a helpful and accurate answer based on the context provided. If the answer cannot be found in the context, please say so."""
 
-            response = self.llm.invoke(prompt)
+            response = self.gemini_model.generate_content(prompt)
             
             return ChatResponse(
-                response=response.content,
+                response=response.text,
                 sources=relevant_sources
+            )
+            
+        except Exception as e:
+            raise Exception(f"Gemini chat failed: {str(e)}")
+    
+    async def chat_with_ollama(self, request: ChatRequest) -> ChatResponse:
+        """Chat with documents using Ollama local LLM"""
+        try:
+            # Get files from folder
+            files = self.get_folder_files(str(request.folder_id))
+            
+            # Ensure files are indexed
+            await self.ensure_files_are_indexed(str(request.folder_id), files)
+            
+            # Search for relevant content
+            relevant_chunks, relevant_sources, all_sources = await self.search_relevant_content(
+                request.message, str(request.folder_id)
+            )
+            
+            if not relevant_chunks:
+                return ChatResponse(
+                    response="I couldn't find relevant information in the uploaded documents to answer your question.",
+                    sources=all_sources
+                )
+            
+            # Build context from relevant documents
+            context = "\n\n".join(relevant_chunks[:3])  # Use top 3 chunks
+            
+            # Prepare messages for Ollama
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that answers questions based on the provided document context. Always base your answers on the given context."
+                },
+                {
+                    "role": "user",
+                    "content": f"""Based on the following context from the uploaded documents, please answer the question.
+            
+                Context:
+                {context}
+                
+                Question: {request.message}
+
+                Please provide a helpful and accurate answer based on the context provided. If the answer cannot be found in the context, please say so."""
+                }
+            ]
+            
+            # Call Ollama API
+            response = requests.post(
+                f"{config.OLLAMA_BASE_URL}/api/chat",
+                json={
+                    "model": config.OLLAMA_MODEL,
+                    "messages": messages,
+                    "stream": False
+                },
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+            
+            result = response.json()
+            
+            return ChatResponse(
+                response=result.get("message", {}).get("content", "No response generated"),
+                sources=relevant_sources
+            )
+            
+        except Exception as e:
+            raise Exception(f"Ollama chat failed: {str(e)}")
+    
+    async def chat_with_openai(self, request: ChatRequest) -> ChatResponse:
+        """Chat with documents using OpenAI"""
+        try:
+            # Check if OpenAI is available
+            if self.llm is None or self.embeddings is None:
+                # Search for relevant content without AI processing
+                files = self.get_folder_files(str(request.folder_id))
+                await self.ensure_files_are_indexed(str(request.folder_id), files)
+                relevant_chunks, relevant_sources, all_sources = await self.search_relevant_content(
+                    request.message, str(request.folder_id)
+                )
+                
+                error_msg = "OpenAI is not available. Please check your API key configuration."
+                if relevant_chunks:
+                    response_text = f"{error_msg}\n\nHowever, I found these potentially relevant excerpts from your documents:\n\n"
+                    response_text += "\n\n".join(relevant_chunks[:2])  # Show top 2 chunks
+                    return ChatResponse(
+                        response=response_text,
+                        sources=relevant_sources,
+                        model="Unavailable"
+                    )
+                else:
+                    return ChatResponse(
+                        response=f"{error_msg} Additionally, I couldn't find relevant information in the documents for your query.",
+                        sources=all_sources,
+                        model="Unavailable"
+                    )
+            
+            # Get files from folder
+            files = self.get_folder_files(str(request.folder_id))
+            
+            # Ensure files are indexed
+            await self.ensure_files_are_indexed(str(request.folder_id), files)
+            
+            # Use RAG approach with vector store
+            rag_chat = RAGChat(self.vector_store)
+            
+            result = await rag_chat.chat(
+                message=request.message,
+                folder_id=str(request.folder_id),
+                k=5
+            )
+            
+            return ChatResponse(
+                response=result["answer"],
+                sources=[source["metadata"].get("filename", "Unknown") for source in result["sources"]]
             )
             
         except Exception as e:
@@ -106,56 +322,82 @@ Please provide a helpful and accurate answer based on the context provided. If t
                 raise Exception(f"OpenAI quota exceeded: {str(e)}")
             else:
                 raise Exception(f"Chat failed: {str(e)}")
-            
-            
-    def simple_chat(self, request: ChatRequest) -> ChatResponse:
-        """Simple chat without OpenAI - uses local embeddings and basic matching"""
-        try:
-            # Get files from folder
+    
+    async def smart_chat(self, request: ChatRequest) -> ChatResponse:
+        """
+        Intelligent chat that automatically selects the best available model.
+        Priority: OpenAI -> Gemini -> Ollama
+        """
+        best_model = self.determine_best_model()
+        
+        # Handle case when no models are available
+        if best_model == "unavailable":
+            # Get files from folder to retrieve relevant chunks
             files = self.get_folder_files(str(request.folder_id))
             
-            # Process files to extract text
-            all_texts, sources = self.document_service.process_files_to_text(files)
+            # Ensure files are indexed
+            await self.ensure_files_are_indexed(str(request.folder_id), files)
             
-            if not all_texts:
-                raise Exception("No readable text found in PDFs")
-            
-            # Split text into chunks
-            chunks, chunk_sources = self.document_service.split_texts_to_chunks(all_texts, sources)
-            
-            # Create embeddings for chunks and query
-            chunk_embeddings = self.sentence_model.encode(chunks)
-            query_embedding = self.sentence_model.encode([request.message])
-            
-            # Find most similar chunks
-            similarities = cosine_similarity(query_embedding, chunk_embeddings)[0]
-            top_indices = np.argsort(similarities)[-3:][::-1]  # Top 3 most similar
-            
-            # Get relevant chunks
-            relevant_chunks = [chunks[i] for i in top_indices if similarities[i] > 0.1]
-            relevant_sources = list(set([chunk_sources[i] for i in top_indices if similarities[i] > 0.1]))
+            # Search for relevant content
+            relevant_chunks, relevant_sources, all_sources = await self.search_relevant_content(
+                request.message, str(request.folder_id), k=5
+            )
             
             if not relevant_chunks:
                 return ChatResponse(
-                    response="I couldn't find relevant information in the uploaded documents to answer your question.",
-                    sources=sources
+                    response="I couldn't find relevant information in your documents. Additionally, no AI models are currently available to process your question. Please check your API keys and connections.",
+                    sources=all_sources,
+                    model="Unavailable"
                 )
             
-            # Simple response generation (without LLM)
-            context = "\n\n".join(relevant_chunks[:2])  # Use top 2 chunks
+            # Return response with relevant chunks but no AI-generated text
+            response_text = f"""No AI models are currently available to process your question. Please check your API keys and connections.
             
-            response_text = f"""Based on the uploaded documents, here are the most relevant excerpts:
+However, I found these potentially relevant excerpts from your documents:
 
-{context}
-
-Question: {request.message}
-
-The above content from your documents seems most relevant to your question. Please review the excerpts for specific details."""
+{relevant_chunks[0] if relevant_chunks else "No relevant content found."}"""
+            
+            if len(relevant_chunks) > 1:
+                response_text += f"\n\n{relevant_chunks[1]}"
             
             return ChatResponse(
                 response=response_text,
-                sources=relevant_sources
+                sources=relevant_sources,
+                model="Unavailable"
             )
+        
+        try:
+            if best_model == "openai":
+                print("Using OpenAI model for chat")
+                return await self.chat_with_openai(request)
+            elif best_model == "gemini":
+                print("Using Gemini model for chat")
+                return await self.chat_with_gemini(request)
+            elif best_model == "ollama":
+                print("Using Ollama model for chat")
+                return await self.chat_with_ollama(request)
             
         except Exception as e:
-            raise Exception(f"Simple chat failed: {str(e)}") 
+            # If the selected model fails, try fallback models
+            print(f"Primary model ({best_model}) failed: {str(e)}")
+            
+            if best_model == "openai":
+                try:
+                    print("Falling back to Gemini")
+                    return await self.chat_with_gemini(request)
+                except Exception as gemini_error:
+                    try:
+                        print(f"Gemini also failed: {str(gemini_error)}, falling back to Ollama")
+                        return await self.chat_with_ollama(request)
+                    except Exception as ollama_error:
+                        print(f"Ollama also failed: {str(ollama_error)}")
+                        raise Exception("All AI models failed. Please check your API keys and connections.")
+            elif best_model == "gemini":
+                try:
+                    print("Falling back to Ollama")
+                    return await self.chat_with_ollama(request)
+                except Exception as ollama_error:
+                    print(f"Ollama also failed: {str(ollama_error)}")
+                    raise Exception("All AI models failed. Please check your API keys and connections.")
+            else:
+                raise Exception(f"All models failed: {str(e)}")

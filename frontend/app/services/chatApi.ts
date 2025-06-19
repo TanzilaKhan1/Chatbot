@@ -21,34 +21,75 @@ export const chatWithDocuments = async (request: ChatRequest): Promise<ChatRespo
   }
 };
 
-export const simpleChatWithDocuments = async (request: ChatRequest): Promise<ChatResponse> => {
+export const geminiChatWithDocuments = async (request: ChatRequest): Promise<ChatResponse> => {
   try {
-    const response = await apiClient.post<ChatResponse>(`/chat/simple`, request, {
+    const response = await apiClient.post<ChatResponse>(`/chat/gemini`, request, {
       headers: {
         'Content-Type': 'application/json'
       }
     });
     return response.data;
   } catch (error: any) {
-    console.error('Simple chat failed:', error);
+    console.error('Gemini chat failed:', error);
     if (error.response) {
       console.error('Error response:', error.response.data);
-      throw new Error(error.response.data.detail || 'Simple chat failed');
+      throw new Error(error.response.data.detail || 'Gemini chat failed');
     }
     throw error;
   }
 };
 
-export const checkSimpleChatHealth = async () => {
-  const response = await apiClient.get(`/chat/simple/health`);
-  return response.data;
+export const ollamaChatWithDocuments = async (request: ChatRequest): Promise<ChatResponse> => {
+  try {
+    const response = await apiClient.post<ChatResponse>(`/chat/ollama`, request, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error('Ollama chat failed:', error);
+    if (error.response) {
+      console.error('Error response:', error.response.data);
+      throw new Error(error.response.data.detail || 'Ollama chat failed');
+    }
+    throw error;
+  }
+};
+
+export const smartChatWithDocuments = async (request: ChatRequest): Promise<ChatResponse> => {
+  try {
+    const response = await apiClient.post<ChatResponse>(`/chat/smart`, request, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error('Smart chat failed:', error);
+    if (error.response) {
+      console.error('Error response:', error.response.data);
+      throw new Error(error.response.data.detail || 'Smart chat failed');
+    }
+    throw error;
+  }
+};
+
+export const getModelsStatus = async () => {
+  try {
+    const response = await apiClient.get(`/chat/models/status`);
+    return response.data;
+  } catch (error: any) {
+    console.error('Failed to get models status:', error);
+    throw error;
+  }
 };
 
 export const chatWithSession = async (
   message: string,
   folderId: string,
   sessionId?: string,
-  model: string = 'OpenAI'
+  model: string = 'Smart'
 ): Promise<ChatWithSessionResponse> => {
   const params = new URLSearchParams({
     message,
@@ -68,18 +109,19 @@ export const chatWithSession = async (
   } catch (error: any) {
     console.error('Chat with session failed:', error);
     
-    // Check if error is OpenAI quota exceeded (insufficient_quota)
+    // Check if error is API quota exceeded
     const isQuotaError = 
       error.response?.data?.detail?.includes('insufficient_quota') || 
-      error.response?.data?.detail?.includes('quota');
+      error.response?.data?.detail?.includes('quota') ||
+      error.response?.data?.detail?.includes('rate limit');
     
-    if (isQuotaError && model === 'OpenAI') {
-      console.log('OpenAI quota exceeded, falling back to simple chat...');
-      // Try again with simple chat
+    if (isQuotaError && (model === 'OpenAI' || model === 'Gemini' || model === 'Ollama')) {
+      console.log(`${model} quota/rate limit exceeded, falling back to Smart mode...`);
+      // Try again with Smart mode (will automatically select best available)
       const fallbackParams = new URLSearchParams({
         message,
         folder_id: folderId,
-        model: 'Simple'  // Switch to simple chat
+        model: 'Smart'
       });
       
       if (sessionId) {
@@ -93,5 +135,20 @@ export const chatWithSession = async (
     }
     
     throw error;
+  }
+};
+
+// Check if all files in a folder are indexed and ready for querying
+export const checkFolderFilesIndexed = async (folderId: string): Promise<{ indexed: boolean, storage?: string }> => {
+  try {
+    const response = await apiClient.get(`/chat/folder/${folderId}/indexed`);
+    return {
+      indexed: (response.data as { indexed: boolean, storage?: string }).indexed,
+      storage: (response.data as { indexed: boolean, storage?: string }).storage
+    };
+  } catch (error) {
+    console.error('Error checking if folder files are indexed:', error);
+    // If there's an error, we'll assume files are ready to avoid false negatives
+    return { indexed: true };
   }
 }; 
