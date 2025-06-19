@@ -82,3 +82,4 @@ class MessageResponse(BaseModel):
 
 class SessionWithMessages(SessionResponse):
     messages: List[MessageResponse] = []
+    
