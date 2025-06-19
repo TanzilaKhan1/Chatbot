@@ -36,7 +36,7 @@ AI Chat PDF combines a modern Next.js frontend with a FastAPI backend to provide
   - PyPDF
   - PDFPlumber
   - PyMuPDF
-- **Vector Database**: Qdrant for document embeddings
+- **Vector Database**: Qdrant, Supabase Vector Store pgvector for document embeddings
 - **Database**: Supabase
 
 ## Architecture
@@ -45,8 +45,8 @@ The application follows a client-server architecture:
 
 1. **Frontend**: Next.js application that provides the user interface for document management and chat
 2. **Backend API**: FastAPI server that handles document processing, vector search, and AI integration
-3. **Vector Store**: Qdrant database that stores document chunks and embeddings
-4. **LLM Service**: Integration with OpenAI's models for generating responses
+3. **Vector Store**: Qdrant database and Supabase Vector Store pgvector that stores document chunks and embeddings
+4. **LLM Service**: Integration with Gemini, Ollama, OpenAI's models for generating responses
 
 ## Setup and Installation
 
@@ -74,7 +74,7 @@ The application follows a client-server architecture:
 
 4. Start the backend server:
    ```bash
-   uvicorn main:app --reload
+   python main.py
    ```
 
 ### Frontend Setup
